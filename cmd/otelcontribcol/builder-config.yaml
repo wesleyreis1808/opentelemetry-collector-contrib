@@ -132,6 +132,7 @@ receivers:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/apachereceiver v0.102.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/apachesparkreceiver v0.102.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscloudwatchreceiver v0.102.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscloudwatchmetricsreceiver v0.102.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscontainerinsightreceiver v0.102.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsecscontainermetricsreceiver v0.102.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsfirehosereceiver v0.102.0
@@ -396,6 +397,7 @@ replaces:
   - github.com/open-telemetry/opentelemetry-collector-contrib/receiver/snmpreceiver => ../../receiver/snmpreceiver
   - github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mongodbatlasreceiver => ../../receiver/mongodbatlasreceiver
   - github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscloudwatchreceiver => ../../receiver/awscloudwatchreceiver
+  - github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscloudwatchmetricsreceiver => ../../receiver/awscloudwatchmetricsreceiver
   - github.com/open-telemetry/opentelemetry-collector-contrib/exporter/lokiexporter => ../../exporter/lokiexporter
   - github.com/open-telemetry/opentelemetry-collector-contrib/internal/sharedcomponent => ../../internal/sharedcomponent
   - github.com/open-telemetry/opentelemetry-collector-contrib/receiver/expvarreceiver => ../../receiver/expvarreceiver

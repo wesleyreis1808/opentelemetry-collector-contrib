@@ -4,8 +4,8 @@ scope_name: otelcol/awscloudwatchmetricsreceiver
 status:
   class: receiver
   stability:
-    development: [metrics]
-  distributions: []
+    alpha: [metrics]
+  distributions: [contrib]
   codeowners:
     active: []
 

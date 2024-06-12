@@ -128,6 +128,7 @@ import (
 	aerospikereceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/aerospikereceiver"
 	apachereceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/apachereceiver"
 	apachesparkreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/apachesparkreceiver"
+	awscloudwatchmetricsreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscloudwatchmetricsreceiver"
 	awscloudwatchreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscloudwatchreceiver"
 	awscontainerinsightreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awscontainerinsightreceiver"
 	awsecscontainermetricsreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsecscontainermetricsreceiver"
@@ -264,6 +265,7 @@ func components() (otelcol.Factories, error) {
 		apachereceiver.NewFactory(),
 		apachesparkreceiver.NewFactory(),
 		awscloudwatchreceiver.NewFactory(),
+		awscloudwatchmetricsreceiver.NewFactory(),
 		awscontainerinsightreceiver.NewFactory(),
 		awsecscontainermetricsreceiver.NewFactory(),
 		awsfirehosereceiver.NewFactory(),
