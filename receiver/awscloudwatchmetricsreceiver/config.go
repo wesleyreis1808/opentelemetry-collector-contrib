@@ -9,6 +9,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
+	"go.opentelemetry.io/collector/confmap"
 )
 
 var (
@@ -25,42 +29,56 @@ type Config struct {
 }
 
 // MetricsConfig is the configuration for the metrics part of the receiver
-// added this so we could expand to other inputs such as autodiscover
+// this is so we could expand to other inputs such as autodiscover
 type MetricsConfig struct {
-	Names []*NamedConfig `mapstructure:"named"`
+	AutoDiscover *AutoDiscoverConfig `mapstructure:"autodiscover,omitempty"`
+	NamedMetrics []NamedMetricConfig `mapstructure:"named"`
 }
 
-// NamesConfig is the configuration for the metric namespace and metric names
-// https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html
-type NamedConfig struct {
-	Namespace      string                   `mapstructure:"namespace"`
-	MetricName     string                   `mapstructure:"metric_name"`
-	Period         time.Duration            `mapstructure:"period"`
-	AwsAggregation string                   `mapstructure:"aws_aggregation"`
-	Dimensions     []MetricDimensionsConfig `mapstructure:"dimensions"`
+type AutoDiscoverConfig struct {
+	Namespace      string                  `mapstructure:"namespace"`
+	MetricName     *string                 `mapstructure:"metric_name"`
+	AwsAggregation string                  `mapstructure:"aws_aggregation"`
+	Period         time.Duration           `mapstructure:"period"`
+	Dimensions     []MetricDimensionConfig `mapstructure:"dimensions"`
+}
+
+type NamedMetricConfig struct {
+	Namespace      string                  `mapstructure:"namespace"`
+	MetricName     string                  `mapstructure:"metric_name"`
+	Period         time.Duration           `mapstructure:"period"`
+	AwsAggregation string                  `mapstructure:"aws_aggregation"`
+	Dimensions     []MetricDimensionConfig `mapstructure:"dimensions"`
 }
 
 // MetricDimensionConfig is the configuration for the metric dimensions
-type MetricDimensionsConfig struct {
-	Name  string `mapstructure:"Name"`
-	Value string `mapstructure:"Value"`
+type MetricDimensionConfig struct {
+	Name  string `mapstructure:"name"`
+	Value string `mapstructure:"value"`
 }
 
 var (
-	errNoMetricsConfigured   = errors.New("no metrics configured")
-	errNoNamespaceConfigured = errors.New("no metric namespace configured")
-	errNoRegion              = errors.New("no region was specified")
-	errInvalidPollInterval   = errors.New("poll interval is incorrect, it must be a duration greater than one second")
+	errNoMetricsConfigured            = errors.New("no named metrics configured")
+	errNoMetricNameConfigured         = errors.New("metric name was empty")
+	errNoNamespaceConfigured          = errors.New("no metric namespace configured")
+	errNoRegion                       = errors.New("no region was specified")
+	errInvalidPollInterval            = errors.New("poll interval is incorrect, it must be a duration greater than one second")
+	errAutodiscoverAndNamedConfigured = errors.New("both autodiscover and named configs are configured, only one or the other is permitted")
+	errInvalidPeriod                  = errors.New("period is incorrect, it must be 1s, 5s, 10s, 30s, 60s, or any multiple of 60 seconds")
+	errInvalidIMDSEndpoint            = errors.New("unable to parse URI for imds endpoint")
 
 	// https://docs.aws.amazon.com/cli/latest/reference/cloudwatch/get-metric-data.html
-	errEmptyDimensions      = errors.New("dimensions name and value is empty")
-	errTooManyDimensions    = errors.New("you cannot define more than 30 dimensions for a metric")
-	errDimensionColonPrefix = errors.New("dimension name cannot start with a colon")
-
+	errEmptyDimensions       = errors.New("dimensions name and value is empty")
+	errTooManyDimensions     = errors.New("you cannot define more than 30 dimensions for a metric")
+	errDimensionColonPrefix  = errors.New("dimension name cannot start with a colon")
 	errInvalidAwsAggregation = errors.New("invalid AWS aggregation")
 )
 
 func (cfg *Config) Validate() error {
+	if cfg.Metrics == nil {
+		return errNoMetricsConfigured
+	}
+
 	if cfg.Region == "" {
 		return errNoRegion
 	}
@@ -68,50 +86,118 @@ func (cfg *Config) Validate() error {
 	if cfg.IMDSEndpoint != "" {
 		_, err := url.ParseRequestURI(cfg.IMDSEndpoint)
 		if err != nil {
-			return fmt.Errorf("unable to parse URI for imds_endpoint: %w", err)
+			return errors.Join(errInvalidIMDSEndpoint, fmt.Errorf("imds_endpoint: %v", cfg.IMDSEndpoint))
 		}
 	}
 
 	if cfg.PollInterval < time.Second {
 		return errInvalidPollInterval
 	}
-	var errs error
-	errs = errors.Join(errs, cfg.validateMetricsConfig())
-	return errs
+	return cfg.validateMetricsConfig()
+}
+
+// Unmarshal is a custom unmarshaller that ensures that autodiscover is nil if
+// autodiscover is not specified
+func (cfg *Config) Unmarshal(componentParser *confmap.Conf) error {
+	if componentParser == nil {
+		return errors.New("")
+	}
+	err := componentParser.Unmarshal(cfg)
+	if err != nil {
+		return err
+	}
+
+	if componentParser.IsSet("metrics::named") && !componentParser.IsSet("metrics::autodiscover") {
+		cfg.Metrics.AutoDiscover = nil
+		return nil
+	}
+
+	if componentParser.IsSet("metrics::autodiscover") && !componentParser.IsSet("metrics::named") {
+		cfg.Metrics.NamedMetrics = nil
+		return nil
+	}
+
+	return nil
 }
 
 func (cfg *Config) validateMetricsConfig() error {
-	if cfg.Metrics == nil {
-		return errNoMetricsConfigured
+	if len(cfg.Metrics.NamedMetrics) > 0 && cfg.Metrics.AutoDiscover != nil {
+		return errAutodiscoverAndNamedConfigured
 	}
-	return cfg.validateNamedConfig()
+	if cfg.Metrics.AutoDiscover != nil {
+		return validateAutoDiscoveryConfig(cfg.Metrics.AutoDiscover)
+	}
+	return cfg.validateNamedMetrics()
 }
 
-func (cfg *Config) validateNamedConfig() error {
-	if cfg.Metrics.Names == nil {
-		return errNoMetricsConfigured
+func validateAutoDiscoveryConfig(autodiscoveryConfig *AutoDiscoverConfig) error {
+	if autodiscoveryConfig.Namespace == "" {
+		return errNoNamespaceConfigured
 	}
-	return cfg.validateDimensionsConfig()
+
+	if err := validatePeriod(autodiscoveryConfig.Period); err != nil {
+		return err
+	}
+	if err := validateAwsAggregation(autodiscoveryConfig.AwsAggregation); err != nil {
+		return err
+	}
+	if err := validateDimensions(autodiscoveryConfig.Dimensions); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (cfg *Config) validateDimensionsConfig() error {
-	var errs error
+// Period have be 1, 5, 10, 30, 60, or any multiple of 60 seconds
+func validatePeriod(period time.Duration) error {
+	seconds := int(period.Seconds())
 
-	metricsNames := cfg.Metrics.Names
-	for _, name := range metricsNames {
-		if name.Namespace == "" {
+	switch seconds {
+	case 1, 5, 10, 30, 60:
+		break
+	default:
+		if seconds <= 0 || seconds%60 != 0 {
+			return errors.Join(errInvalidPeriod, fmt.Errorf("period: %v", period))
+		}
+	}
+	return nil
+}
+
+func (cfg *Config) validateNamedMetrics() error {
+
+	for _, metric := range cfg.Metrics.NamedMetrics {
+		if metric.Namespace == "" {
 			return errNoNamespaceConfigured
 		}
-		err := validateAwsAggregation(name.AwsAggregation)
-		if err != nil {
+		if metric.MetricName == "" {
+			return errNoMetricNameConfigured
+		}
+		if err := validatePeriod(metric.Period); err != nil {
 			return err
 		}
-		if name.MetricName == "" {
-			return errNoMetricsConfigured
+		if err := validateDimensions(metric.Dimensions); err != nil {
+			return err
 		}
-		errs = errors.Join(errs, validate(name.Dimensions))
+		if err := validateAwsAggregation(metric.AwsAggregation); err != nil {
+			return err
+		}
 	}
-	return errs
+
+	return nil
+}
+
+func validateDimensions(mdc []MetricDimensionConfig) error {
+	if len(mdc) > 30 {
+		return errTooManyDimensions
+	}
+	for _, dimensionConfig := range mdc {
+		if dimensionConfig.Name == "" || dimensionConfig.Value == "" {
+			return errors.Join(errEmptyDimensions, fmt.Errorf("name: %v, value: %v", dimensionConfig.Name, dimensionConfig.Value))
+		}
+		if strings.HasPrefix(dimensionConfig.Name, ":") {
+			return errors.Join(errDimensionColonPrefix, fmt.Errorf("dimension name: %v", dimensionConfig.Name))
+		}
+	}
+	return nil
 }
 
 // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Statistics-definitions.html
@@ -127,34 +213,36 @@ func validateAwsAggregation(agg string) error {
 		return nil
 	case agg == "Maximum":
 		return nil
-	case strings.HasPrefix(agg, "p"):
-		return nil
-	case strings.HasPrefix(agg, "TM"):
-		return nil
 	case agg == "IQM":
 		return nil
-	case strings.HasPrefix(agg, "PR"):
+	case strings.HasPrefix(agg, "p") && len(agg) > 1:
 		return nil
-	case strings.HasPrefix(agg, "TC"):
+	case strings.HasPrefix(agg, "TM") && len(agg) > 2:
 		return nil
-	case strings.HasPrefix(agg, "TS"):
+	case strings.HasPrefix(agg, "PR") && len(agg) > 2:
+		return nil
+	case strings.HasPrefix(agg, "TC") && len(agg) > 2:
+		return nil
+	case strings.HasPrefix(agg, "TS") && len(agg) > 2:
+		return nil
+	case strings.HasPrefix(agg, "WM") && len(agg) > 2:
 		return nil
 	default:
-		return errInvalidAwsAggregation
+		return errors.Join(errInvalidAwsAggregation, fmt.Errorf("aggregation: %v", agg))
 	}
 }
 
-func validate(nmd []MetricDimensionsConfig) error {
-	for _, dimensionConfig := range nmd {
-		if dimensionConfig.Name == "" || dimensionConfig.Value == "" {
-			return errEmptyDimensions
-		}
-		if strings.HasPrefix(dimensionConfig.Name, ":") {
-			return errDimensionColonPrefix
-		}
+func (a *AutoDiscoverConfig) DimensionsFilter() []types.DimensionFilter {
+	if len(a.Dimensions) == 0 {
+		return nil
 	}
-	if len(nmd) > 30 {
-		return errTooManyDimensions
+
+	filter := make([]types.DimensionFilter, 0, len(a.Dimensions))
+	for _, d := range a.Dimensions {
+		filter = append(filter, types.DimensionFilter{
+			Name:  aws.String(d.Name),
+			Value: aws.String(d.Value),
+		})
 	}
-	return nil
+	return filter
 }

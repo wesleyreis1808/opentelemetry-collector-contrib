@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
 )
 
@@ -20,21 +21,25 @@ type metricReceiver struct {
 	pollInterval  time.Duration
 	nextStartTime time.Time
 	logger        *zap.Logger
+	autoDiscover  *AutoDiscoverConfig
 	consumer      consumer.Metrics
+	buildInfo     component.BuildInfo
 	wg            *sync.WaitGroup
 	doneChan      chan bool
 }
 
-func newMetricReceiver(cfg *Config, logger *zap.Logger, consumer consumer.Metrics) *metricReceiver {
+func newMetricReceiver(cfg *Config, set receiver.Settings, consumer consumer.Metrics) *metricReceiver {
 	return &metricReceiver{
 		region:        cfg.Region,
 		profile:       cfg.Profile,
 		imdsEndpoint:  cfg.IMDSEndpoint,
 		pollInterval:  cfg.PollInterval,
 		nextStartTime: time.Now().Add(-cfg.PollInterval),
-		logger:        logger,
+		logger:        set.Logger,
+		autoDiscover:  cfg.Metrics.AutoDiscover,
 		wg:            &sync.WaitGroup{},
 		consumer:      consumer,
+		buildInfo:     set.BuildInfo,
 		doneChan:      make(chan bool),
 	}
 }
